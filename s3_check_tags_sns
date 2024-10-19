@@ -1,0 +1,88 @@
+import os
+import boto3
+import logging
+
+sns_client = boto3.client('sns')
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+SNS_TOPIC_ARN = 'sns-arn'  
+ADMIN_EMAIL = 'some@email.com'
+
+def check_ec2_tags():
+    ec2 = boto3.client('ec2')
+    instances = ec2.describe_instances()
+    results = {}
+
+    for reservation in instances['Reservations']:
+        for instance in reservation['Instances']:
+            instance_id = instance['InstanceId']
+            tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
+            results[instance_id] = tags  
+
+    return results
+
+def check_s3_tags():
+    s3 = boto3.client('s3')
+    buckets = s3.list_buckets()
+    results = {}
+
+    for bucket in buckets['Buckets']:
+        bucket_name = bucket['Name']
+        
+        try:
+            tags = s3.get_bucket_tagging(Bucket=bucket_name)
+            bucket_tags = {tag['Key']: tag['Value'] for tag in tags['TagSet']}
+            results[bucket_name] = bucket_tags  
+            
+        except s3.exceptions.ClientError as e:
+            if e.response['Error']['Code'] == 'NoSuchTagSet':
+                results[bucket_name] = "No tags found"
+            else:
+                logger.error(f"Error retrieving tags for bucket {bucket_name}: {e}")
+                results[bucket_name] = "Error retrieving tags"
+
+    return results
+
+def lambda_handler(event, context):
+    logger.info("Checking EC2 Tags")
+    ec2_results = check_ec2_tags()
+    
+    logger.info("Checking S3 Tags")
+    s3_results = check_s3_tags()
+    
+    # The message for outputs
+    message_lines = ["Tagging Information:"]
+    
+    message_lines.append("EC2 Instances:")
+    for instance_id, tags in ec2_results.items():
+        message_lines.append(f"Instance ID: {instance_id}, Tags: {tags if tags else 'No tags found'}")
+
+    message_lines.append("S3 Buckets:")
+    for bucket_name, tags in s3_results.items():
+        message_lines.append(f"Bucket Name: {bucket_name}, Tags: {tags if tags != 'No tags found' else 'No tags found'}")
+
+    message = "\n".join(message_lines)
+
+    # Add user's emails for sending notifications
+    users = ["email.com"]  
+    
+    if users:
+        for user in users:
+            sns_client.publish(
+                TopicArn=SNS_TOPIC_ARN,
+                Message=message,
+                Subject='Resources Tags Information'
+            )
+    else:
+        logger.info("No users defined for notifications. Sending notification to admin for checking.")
+        sns_client.publish(
+            TopicArn=SNS_TOPIC_ARN,
+            Message=f"No users defined. Sending tagging information to admin.\n\n{message}",
+            Subject='Resources Tags Information for Admin'
+        )
+
+    return {
+        'statusCode': 200,
+        'body': message
+    }
