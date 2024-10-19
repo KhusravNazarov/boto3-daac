@@ -1,0 +1,44 @@
+import os
+import json
+import http.client
+import base64
+import pprint
+
+pp = pprint.PrettyPrinter(indent=4)
+
+def lambda_handler(event, context):
+    domain = os.getenv('DOMAIN')
+    print(f"Domain: {domain}")  # Debugging output
+    # Construct the domain and API endpoint
+    domain = os.getenv('DOMAIN')
+    conn = http.client.HTTPSConnection(domain)
+
+    # Prepare Basic Auth
+    auth = f"{os.getenv('EMAIL')}:{os.getenv('ATLASSIAN_TOKEN')}"
+    encoded_auth = base64.b64encode(auth.encode()).decode()
+
+    # Set up headers
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": f"Basic {encoded_auth}"
+    }
+
+    # Make the GET request
+    try:
+        conn.request("GET", "/wiki/api/v2/spaces?limit=200", headers=headers)
+        response = conn.getresponse()
+        
+        # Read and decode the response
+        response_data = response.read()
+        spaceID = json.loads(response_data)
+
+        # Print the response
+        print("----Length: ",len(spaceID['results']))
+        return { "length": len(spaceID['results']), "data": spaceID }
+        
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+    finally:
+        conn.close()
