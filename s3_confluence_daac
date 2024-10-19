@@ -1,0 +1,142 @@
+import boto3
+import pprint
+import os
+import json
+import base64
+import http.client
+
+def fetch_pages(space_id):
+    # Define the URL and endpoint
+    conn = http.client.HTTPSConnection("DOMAIN")
+    
+    # Create the authentication string
+    auth = f"{os.getenv('EMAIL')}:{os.getenv('ATLASSIAN_TOKEN')}"
+    encoded_auth = base64.b64encode(auth.encode()).decode()
+    
+    # Set the headers
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Basic {encoded_auth}"
+    }
+
+    # Make the GET request
+    url = f"/wiki/api/v2/spaces/{space_id}/pages"
+    conn.request("GET", url, headers=headers)
+
+    # Get the response
+    response = conn.getresponse()
+    response_data = response.read()
+    pages = json.loads(response_data)
+    page_ids = [page['id'] for page in pages.get('results', [])]  # Adjust based on your response structure
+    print("Page IDs:", page_ids)
+    # Close the connection
+    conn.close()
+
+    # Return the parsed JSON response
+    return (page_ids)
+
+def lambda_handler(event, context):
+    space_id = "552011453"  # Replace with your space ID
+    try:
+        pages = fetch_pages(space_id)
+        return pages
+        
+    except Exception as e:
+        return {
+            'statusCode': 500,
+            'body': json.dumps({'error': str(e)})
+        }
+
+pp = pprint.PrettyPrinter(indent=4)
+client = boto3.client('s3')
+
+def getBuckets():
+    response = client.list_buckets()
+    return response['Buckets']
+
+def getBucketTags(bucket):
+    try:
+        response = client.get_bucket_tagging(Bucket=bucket)
+        if response:
+            tag_list = [f"{tags['Key']} : {tags['Value']}" for tags in response['TagSet']]
+            return tag_list
+    except Exception:
+        return "No Tags"
+
+TableRow = """
+<tr>
+    <th>Bucket Name</th>
+    <th>CreatedAt</th>
+    <th>Tags</th>
+</tr>
+"""
+
+def prepare_table():
+    buckets = getBuckets()
+    global TableRow
+    for bucket in buckets:
+        bucket_tags = getBucketTags(bucket['Name'])
+        bucket_name = bucket['Name']
+        bucket_creation = bucket['CreationDate']
+        html_tags = ""
+        if bucket_tags == "No Tags":
+            html_tags += "<li>No Tags</li>"
+        else:
+            for tag in bucket_tags:
+                html_tags += f"<li>{tag}</li>"
+
+        TableRow += f"""<tr>
+        <td>{bucket_name}</td>
+        <td>{bucket_creation}</td>
+        <td>
+            <ul>
+            {html_tags}
+            </ul>
+        </td>
+    </tr>"""
+
+def Publish():
+    conn = http.client.HTTPSConnection("DOAMIN")
+
+    auth = f"{os.getenv('EMAIL')}:{os.getenv('ATLASSIAN_TOKEN')}"
+    encoded_auth = base64.b64encode(auth.encode()).decode()
+
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": f"Basic {encoded_auth}"
+    }
+
+    payload = json.dumps({
+        "spaceId": "552011453",
+        "title": "S3 Buckets HTML-1",
+        "body": {
+            "representation": "storage",
+            "value": f"""
+<h1>Dynamic S3 Bucket Table</h1>
+<p>This is a cool project.</p>
+<br>
+<h2>Tags:</h2>
+<br>
+<table>
+    {TableRow}
+</table>
+"""
+        }
+    }).encode('utf-8')
+    
+    conn.request("POST", "/wiki/api/v2/pages", body=payload, headers=headers)
+    
+    response = conn.getresponse()
+    response_data = response.read()
+
+    print(json.dumps(json.loads(response_data), sort_keys=True, indent=4, separators=(",", ": ")))
+    conn.close()
+
+def lambda_handler(event, context):
+    prepare_table()
+    Publish()
+    return {
+        'statusCode': 200,
+        'body': json.dumps('S3 Bucket information published successfully!')
+    }
